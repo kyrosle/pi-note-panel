@@ -72,7 +72,16 @@ test("note and preference read-modify-writes share the controller queue", async 
       controller.setWidth(40),
     ]);
     assert.equal((await controller.read()).content, "# Status\nReady\n");
-    assert.deepEqual(JSON.parse(await readFile(join(cwd, ".pi", "note-panel.json"), "utf8")), { enabled: false, width: 40 });
+    assert.deepEqual(JSON.parse(await readFile(join(cwd, ".pi", "note-panel.json"), "utf8")), { enabled: false, width: 40, height: 20 });
+    await controller.dispose();
+  });
+});
+
+test("setSize persists one complete width-height preference object", async () => {
+  await withProject(async (cwd) => {
+    const controller = await NotePanelController.create(context(cwd) as never);
+    await controller.setSize(48, 28);
+    assert.deepEqual(JSON.parse(await readFile(join(cwd, ".pi", "note-panel.json"), "utf8")), { enabled: false, width: 48, height: 28 });
     await controller.dispose();
   });
 });
@@ -120,13 +129,29 @@ test("headless reads sanitize body text while keeping raw note metadata", async 
   });
 });
 
-test("disabled and narrow TUI states retain capacity metrics through width changes and writes", async () => {
+test("headless status distinguishes enabled preferences while rendered size remains unavailable", async () => {
+  await withProject(async (cwd) => {
+    const controller = await NotePanelController.create(context(cwd) as never);
+    assert.deepEqual(await controller.status(), {
+      enabled: false, configuredWidth: 36, configuredHeight: 20,
+      renderedWidth: null, renderedHeight: null, hiddenReason: "ui-unavailable",
+    });
+    await controller.setEnabled(true);
+    assert.deepEqual(await controller.status(), {
+      enabled: true, configuredWidth: 36, configuredHeight: 20,
+      renderedWidth: null, renderedHeight: null, hiddenReason: "ui-unavailable",
+    });
+    await controller.dispose();
+  });
+});
+
+test("disabled and narrow TUI states retain configured and clamped metrics through size changes and writes", async () => {
   await withProject(async (cwd) => {
     const ctx = context(cwd, { mode: "tui" });
     const controller = await NotePanelController.create(ctx as never);
     const factory = ctx.factory();
     const tui = {
-      terminal: { columns: 96, rows: 8 }, render: (_width: number) => [], requestRender() {},
+      terminal: { columns: 19, rows: 7 }, render: (_width: number) => [], requestRender() {},
       showOverlay() {
         return {
           hide() {}, setHidden() {}, isHidden() { return false; },
@@ -136,25 +161,26 @@ test("disabled and narrow TUI states retain capacity metrics through width chang
     };
     factory?.(tui, undefined);
 
+    await controller.setEnabled(true);
     let metrics = await controller.info();
     assert.equal(metrics.hiddenReason, "narrow-terminal");
-    assert.deepEqual(metrics.panel, { outerWidth: 36, contentWidth: 32, contentRows: 2, scrollOffset: 0 });
+    assert.deepEqual(metrics.panel, { configuredWidth: 36, configuredHeight: 20, outerWidth: 19, outerHeight: 7, contentWidth: 15, contentRows: 1, scrollOffset: 0 });
 
     await controller.setWidth(40);
     metrics = await controller.info();
     assert.equal(metrics.hiddenReason, "narrow-terminal");
-    assert.deepEqual(metrics.panel, { outerWidth: 40, contentWidth: 36, contentRows: 2, scrollOffset: 0 });
+    assert.deepEqual(metrics.panel, { configuredWidth: 40, configuredHeight: 20, outerWidth: 19, outerHeight: 7, contentWidth: 15, contentRows: 1, scrollOffset: 0 });
 
     await controller.setEnabled(false);
     metrics = await controller.info();
     assert.equal(metrics.hiddenReason, "disabled");
-    assert.deepEqual(metrics.panel, { outerWidth: 40, contentWidth: 36, contentRows: 2, scrollOffset: 0 });
+    assert.deepEqual(metrics.panel, { configuredWidth: 40, configuredHeight: 20, outerWidth: 19, outerHeight: 7, contentWidth: 15, contentRows: 1, scrollOffset: 0 });
 
     await controller.replace("fits");
     metrics = await controller.info();
     assert.equal(metrics.note.visibleWrappedLines, 0);
     assert.equal(metrics.note.hiddenWrappedLines, metrics.note.wrappedLines);
-    assert.ok((metrics.note.wrappedLines ?? Number.POSITIVE_INFINITY) <= (metrics.panel.contentRows ?? 0));
+    assert.ok((metrics.note.wrappedLines ?? 0) >= (metrics.panel.contentRows ?? 0));
     await controller.dispose();
   });
 });
@@ -201,7 +227,46 @@ test("unsupported visual layout warns once while leaving commands and tools usab
     const unsupported = { terminal: { columns: 140, rows: 40 }, render() { return []; }, requestRender() {} };
     factory?.(unsupported, undefined);
     factory?.(unsupported, undefined);
-    assert.equal(ctx.notices.filter((message) => message.includes("sidebar is unavailable")).length, 1);
+    assert.equal(ctx.notices.filter((message) => message.includes("overlay is unavailable")).length, 1);
+    await controller.dispose();
+  });
+});
+
+test("synchronous widget factories notify overlay setup failures through their active context", async () => {
+  await withProject(async (cwd) => {
+    const ctx = context(cwd, { mode: "tui" });
+    ctx.ui.setWidget = (_key, widget) => {
+      if (widget !== undefined) {
+        widget({ terminal: { columns: 140, rows: 40 }, requestRender() {} }, undefined);
+      }
+    };
+    const controller = await NotePanelController.create(ctx as never);
+    assert.equal(ctx.notices.filter((message) => message.includes("overlay is unavailable")).length, 1);
+    await controller.dispose();
+  });
+});
+
+test("overlay rebuild failure warns once while persisted display settings remain usable", async () => {
+  await withProject(async (cwd) => {
+    const ctx = context(cwd, { mode: "tui" });
+    const controller = await NotePanelController.create(ctx as never);
+    const factory = ctx.factory();
+    let calls = 0;
+    const tui = {
+      terminal: { columns: 140, rows: 40 }, requestRender() {},
+      showOverlay() {
+        calls += 1;
+        if (calls > 1) throw new Error("overlay unavailable");
+        return { hide() {}, setHidden() {}, isHidden() { return false; }, focus() {}, unfocus() {}, isFocused() { return false; } };
+      },
+    };
+    factory?.(tui, undefined);
+    await controller.setEnabled(true);
+    await controller.setSize(48, 28);
+    await controller.setSize(52, 30);
+    assert.equal(calls, 2);
+    assert.deepEqual(JSON.parse(await readFile(join(cwd, ".pi", "note-panel.json"), "utf8")), { enabled: true, width: 52, height: 30 });
+    assert.equal(ctx.notices.filter((notice) => notice.includes("overlay is unavailable")).length, 1);
     await controller.dispose();
   });
 });

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import { NoteStore } from "../src/note-store.ts";
 import {
+  DEFAULT_PANEL_HEIGHT,
   DEFAULT_PANEL_WIDTH,
   MAX_PANEL_WIDTH,
   MIN_PANEL_WIDTH,
@@ -64,6 +65,14 @@ test("missing notes read as empty without creating .pi", async () => {
 
     assert.equal(await store.read(), "");
     await assert.rejects(() => readFile(store.notePath, "utf8"), { code: "ENOENT" });
+    await assert.rejects(() => readdir(store.piDir), { code: "ENOENT" });
+  });
+});
+
+test("missing preferences use default-off dimensions without creating .pi", async () => {
+  await withProject(async (projectRoot) => {
+    const store = new NoteStore(projectRoot);
+    assert.deepEqual(await store.readPreferences(), { enabled: false, width: DEFAULT_PANEL_WIDTH, height: DEFAULT_PANEL_HEIGHT });
     await assert.rejects(() => readdir(store.piDir), { code: "ENOENT" });
   });
 });
@@ -186,7 +195,7 @@ test("writes reject .pi, note, and preferences symlinks outside the project", as
       const directoryStore = new NoteStore(projectRoot);
       await symlink(outside, directoryStore.piDir);
       await assert.rejects(() => directoryStore.replace("blocked"), /symlink|outside/i);
-      await assert.rejects(() => directoryStore.writePreferences({ enabled: true, width: DEFAULT_PANEL_WIDTH }), /symlink|outside/i);
+      await assert.rejects(() => directoryStore.writePreferences({ enabled: true, width: DEFAULT_PANEL_WIDTH, height: 20 }), /symlink|outside/i);
 
       await rm(directoryStore.piDir);
       await directoryStore.replace("safe");
@@ -200,7 +209,7 @@ test("writes reject .pi, note, and preferences symlinks outside the project", as
 
       await rm(noteStore.notePath);
       await symlink(join(outside, "note-panel.json"), noteStore.preferencesPath);
-      await assert.rejects(() => noteStore.writePreferences({ enabled: true, width: DEFAULT_PANEL_WIDTH }), /symlink|outside/i);
+      await assert.rejects(() => noteStore.writePreferences({ enabled: true, width: DEFAULT_PANEL_WIDTH, height: 20 }), /symlink|outside/i);
     } finally {
       await rm(outside, { force: true, recursive: true });
     }
@@ -233,7 +242,17 @@ test("malformed preferences return defaults", async () => {
     await store.replace("");
     await writeFile(store.preferencesPath, "{not json", "utf8");
 
-    assert.deepEqual(await store.readPreferences(), { enabled: true, width: DEFAULT_PANEL_WIDTH });
+    assert.deepEqual(await store.readPreferences(), { enabled: false, width: DEFAULT_PANEL_WIDTH, height: 20 });
+  });
+});
+
+test("legacy preferences receive the default height without being rewritten", async () => {
+  await withProject(async (projectRoot) => {
+    const store = new NoteStore(projectRoot);
+    await store.replace("");
+    await writeFile(store.preferencesPath, '{"enabled":true,"width":48}\n', "utf8");
+    assert.deepEqual(await store.readPreferences(), { enabled: true, width: 48, height: DEFAULT_PANEL_HEIGHT });
+    assert.equal(await readFile(store.preferencesPath, "utf8"), '{"enabled":true,"width":48}\n');
   });
 });
 
@@ -244,8 +263,8 @@ test("malformed UTF-8 preferences return defaults and warn once", async () => {
     await store.replace("");
     await writeFile(store.preferencesPath, Buffer.from([0xc3, 0x28]));
 
-    assert.deepEqual(await store.readPreferences(), { enabled: true, width: DEFAULT_PANEL_WIDTH });
-    assert.deepEqual(await store.readPreferences(), { enabled: true, width: DEFAULT_PANEL_WIDTH });
+    assert.deepEqual(await store.readPreferences(), { enabled: false, width: DEFAULT_PANEL_WIDTH, height: 20 });
+    assert.deepEqual(await store.readPreferences(), { enabled: false, width: DEFAULT_PANEL_WIDTH, height: 20 });
     assert.deepEqual(warnings, ["Ignoring malformed .pi/note-panel.json; using defaults."]);
   });
 });
@@ -272,7 +291,7 @@ test("read returns empty when NOTE.md disappears after the directory check", asy
 test("preference read filesystem errors are wrapped with a stable project-relative path", async () => {
   await withProject(async (projectRoot) => {
     const writer = new NoteStore(projectRoot);
-    await writer.writePreferences({ enabled: true, width: DEFAULT_PANEL_WIDTH });
+    await writer.writePreferences({ enabled: true, width: DEFAULT_PANEL_WIDTH, height: 20 });
 
     for (const code of ["EACCES", "EIO"]) {
       const store = new NoteStore(projectRoot, {
@@ -520,12 +539,13 @@ test("read wraps directory-check filesystem errors with the stable note path", a
   });
 });
 
-test("invalid preference widths are rejected without writing", async () => {
+test("invalid preference dimensions are rejected without writing", async () => {
   await withProject(async (projectRoot) => {
     const store = new NoteStore(projectRoot);
 
-    await assert.rejects(() => store.writePreferences({ enabled: true, width: MIN_PANEL_WIDTH - 1 }), /width/i);
-    await assert.rejects(() => store.writePreferences({ enabled: false, width: MAX_PANEL_WIDTH + 1 }), /width/i);
+    await assert.rejects(() => store.writePreferences({ enabled: true, width: MIN_PANEL_WIDTH - 1, height: 20 }), /width/i);
+    await assert.rejects(() => store.writePreferences({ enabled: false, width: MAX_PANEL_WIDTH + 1, height: 20 }), /width/i);
+    await assert.rejects(() => store.writePreferences({ enabled: false, width: 36, height: 7 }), /height/i);
     await assert.rejects(() => readFile(store.preferencesPath, "utf8"), { code: "ENOENT" });
   });
 });
@@ -534,9 +554,9 @@ test("valid preferences persist atomically without orphan temp files", async () 
   await withProject(async (projectRoot) => {
     const store = new NoteStore(projectRoot);
 
-    await store.writePreferences({ enabled: false, width: 48 });
+    await store.writePreferences({ enabled: false, width: 48, height: 28 });
 
-    assert.deepEqual(await store.readPreferences(), { enabled: false, width: 48 });
+    assert.deepEqual(await store.readPreferences(), { enabled: false, width: 48, height: 28 });
     assert.deepEqual(await readdir(store.piDir), ["note-panel.json"]);
   });
 });

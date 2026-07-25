@@ -3,13 +3,13 @@ import { resolve } from "node:path";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { NotePanelController } from "./controller.ts";
+import { NotePanelController, type NotePanelStatus } from "./controller.ts";
 import { FileSystemPathError, NoteLimitError, PreferencesValidationError, UnsafePathError } from "./note-store.ts";
 import { sanitizeNoteMarkdown } from "./sanitize.ts";
 import { DuplicateSectionError, SectionInputError, SectionLevelError, type SectionUpdate } from "./sections.ts";
-import { MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, type PanelMetrics } from "./types.ts";
+import { MAX_PANEL_HEIGHT, MAX_PANEL_WIDTH, MIN_PANEL_HEIGHT, MIN_PANEL_WIDTH, type PanelMetrics } from "./types.ts";
 
-const USAGE = "Usage: /note-panel [on|off|width <24-80>|refresh|edit|focus]";
+const USAGE = "Usage: /note-panel [on|off|width <20-160>|height <8-120>|size <20-160> <8-120>|refresh|edit|focus]";
 const TOOL_DESCRIPTION = "Call note_panel_info first to plan visible space. Use semantic Markdown, not manual padding. Notes are not automatically injected into context.";
 
 const EmptyParameters = Type.Object({}, { additionalProperties: false });
@@ -126,7 +126,7 @@ export function registerNotePanelExtension(pi: ExtensionAPI, createController: C
       try {
         const controller = await controllerFor(ctx);
         if (command.kind === "status") {
-          ctx.ui.notify(`${USAGE}\n${infoSummary({ metrics: await controller.info() })}`, "info");
+          ctx.ui.notify(`${USAGE}\n${statusSummary(await controller.status())}`, "info");
         } else if (command.kind === "on") {
           await controller.setEnabled(true);
           ctx.ui.notify("Note panel enabled.", "info");
@@ -136,6 +136,12 @@ export function registerNotePanelExtension(pi: ExtensionAPI, createController: C
         } else if (command.kind === "width") {
           await controller.setWidth(command.width);
           ctx.ui.notify(`Note panel width set to ${command.width}.`, "info");
+        } else if (command.kind === "height") {
+          await controller.setHeight(command.height);
+          ctx.ui.notify(`Note panel height set to ${command.height}.`, "info");
+        } else if (command.kind === "size") {
+          await controller.setSize(command.width, command.height);
+          ctx.ui.notify(`Note panel size set to ${command.width}x${command.height}.`, "info");
         } else if (command.kind === "refresh") {
           await controller.refresh();
           ctx.ui.notify("Note panel refreshed.", "info");
@@ -180,6 +186,8 @@ type NotePanelCommand =
   | { kind: "on" }
   | { kind: "off" }
   | { kind: "width"; width: number }
+  | { kind: "height"; height: number }
+  | { kind: "size"; width: number; height: number }
   | { kind: "refresh" }
   | { kind: "edit" }
   | { kind: "focus" };
@@ -187,7 +195,7 @@ type NotePanelCommand =
 function parseCommand(args: string): NotePanelCommand | null {
   const parts = args.trim() === "" ? [] : args.trim().split(/\s+/);
   if (parts.length === 0) return { kind: "status" };
-  if (parts.length !== 1 && parts[0] !== "width") return null;
+  if (parts.length !== 1 && parts[0] !== "width" && parts[0] !== "height" && parts[0] !== "size") return null;
   if (parts.length === 1 && (parts[0] === "on" || parts[0] === "off" || parts[0] === "refresh" || parts[0] === "edit" || parts[0] === "focus")) {
     return { kind: parts[0] };
   }
@@ -195,11 +203,29 @@ function parseCommand(args: string): NotePanelCommand | null {
     const width = Number(parts[1]);
     return width >= MIN_PANEL_WIDTH && width <= MAX_PANEL_WIDTH ? { kind: "width", width } : null;
   }
+  if (parts.length === 2 && parts[0] === "height" && /^\d+$/.test(parts[1] ?? "")) {
+    const height = Number(parts[1]);
+    return height >= MIN_PANEL_HEIGHT && height <= MAX_PANEL_HEIGHT ? { kind: "height", height } : null;
+  }
+  if (parts.length === 3 && parts[0] === "size" && /^\d+$/.test(parts[1] ?? "") && /^\d+$/.test(parts[2] ?? "")) {
+    const width = Number(parts[1]);
+    const height = Number(parts[2]);
+    return width >= MIN_PANEL_WIDTH && width <= MAX_PANEL_WIDTH && height >= MIN_PANEL_HEIGHT && height <= MAX_PANEL_HEIGHT
+      ? { kind: "size", width, height }
+      : null;
+  }
   return null;
 }
 
 function infoSummary(details: ToolDetails): string {
   return `Panel metrics: ${metricsText(details.metrics)}`;
+}
+
+function statusSummary(status: NotePanelStatus): string {
+  const rendered = status.renderedWidth === null || status.renderedHeight === null
+    ? "unavailable"
+    : `${status.renderedWidth}x${status.renderedHeight}`;
+  return `Note panel status: enabled=${status.enabled}; configured=${status.configuredWidth}x${status.configuredHeight}; rendered=${rendered}; hiddenReason=${status.hiddenReason ?? "none"}.`;
 }
 
 function readText(content: string): string {

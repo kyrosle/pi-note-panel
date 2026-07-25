@@ -1,12 +1,6 @@
 import { sliceByColumn, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
-import { MIN_MAIN_WIDTH } from "./types.ts";
-
 const PANEL_CHROME_ROWS = 6;
-
-export function shouldShowPanel(terminalWidth: number, panelWidth: number, terminalRows = PANEL_CHROME_ROWS + 1): boolean {
-  return terminalRows > PANEL_CHROME_ROWS && terminalWidth >= MIN_MAIN_WIDTH + panelWidth + 1;
-}
 
 export function wrapMarkdownLines(lines: string[], width: number): string[] {
   if (!Number.isFinite(width) || !Number.isInteger(width) || width <= 0) {

@@ -13,7 +13,10 @@ const EMPTY_NOTE_HINT = "No project notes yet.";
 
 export interface SidebarLayoutState {
   terminal: TerminalDimensions | null;
+  configuredWidth: number;
+  configuredHeight: number;
   outerWidth: number | null;
+  outerHeight: number | null;
   visibility: VisibilityState;
 }
 
@@ -32,7 +35,11 @@ export class NoteSidebar implements Component {
   private terminal: TerminalDimensions | null = null;
   private scrollOffset = 0;
   private focused = false;
+  private configuredWidth = 36;
+  private configuredHeight = 20;
   private outerWidth: number | null = null;
+  private outerHeight: number | null = null;
+  private managedLayout = false;
   private requestedVisible = true;
   private hiddenReason: NonNullHiddenReason = "ui-unavailable";
   private escapeHandler: (() => void) | undefined;
@@ -68,16 +75,23 @@ export class NoteSidebar implements Component {
     }
 
     this.terminal = { ...dimensions };
+    if (!this.managedLayout) {
+      this.outerHeight = dimensions.rows;
+    }
     this.clampScrollOffset();
     this.tui.requestRender();
   }
 
   setLayoutState(state: SidebarLayoutState, requestRender = true): void {
+    this.managedLayout = true;
     const nextTerminal = state.terminal === null ? null : { ...state.terminal };
     const nextHiddenReason = state.visibility.visible ? "ui-unavailable" : state.visibility.hiddenReason;
     if (
       sameDimensions(this.terminal, nextTerminal)
+      && this.configuredWidth === state.configuredWidth
+      && this.configuredHeight === state.configuredHeight
       && this.outerWidth === state.outerWidth
+      && this.outerHeight === state.outerHeight
       && this.requestedVisible === state.visibility.visible
       && this.hiddenReason === nextHiddenReason
     ) {
@@ -85,7 +99,10 @@ export class NoteSidebar implements Component {
     }
 
     this.terminal = nextTerminal;
+    this.configuredWidth = state.configuredWidth;
+    this.configuredHeight = state.configuredHeight;
     this.outerWidth = state.outerWidth;
+    this.outerHeight = state.outerHeight;
     this.requestedVisible = state.visibility.visible;
     this.hiddenReason = nextHiddenReason;
     if (!state.visibility.visible) {
@@ -127,7 +144,7 @@ export class NoteSidebar implements Component {
     const visible = this.isVisible();
     const hasCapacity = this.outerWidth !== null && this.terminal !== null;
     const contentWidth = !hasCapacity || this.outerWidth === null ? null : Math.max(0, this.outerWidth - 4);
-    const contentRows = !hasCapacity || this.terminal === null ? null : calculateContentRows(this.terminal.rows);
+    const contentRows = !hasCapacity || this.outerHeight === null ? null : calculateContentRows(this.outerHeight);
     const wrappedLines = contentWidth === null ? null : this.wrappedLines(contentWidth);
     const viewport = !visible || wrappedLines === null || contentRows === null
       ? null
@@ -138,7 +155,10 @@ export class NoteSidebar implements Component {
       uiAvailable: this.terminal !== null,
       terminal: this.terminal === null ? null : { ...this.terminal },
       panel: {
+        configuredWidth: this.configuredWidth,
+        configuredHeight: this.configuredHeight,
         outerWidth: this.outerWidth,
+        outerHeight: this.outerHeight,
         contentWidth,
         contentRows,
         scrollOffset: visible ? viewport?.offset ?? this.scrollOffset : this.scrollOffset,
@@ -242,7 +262,7 @@ export class NoteSidebar implements Component {
   }
 
   private contentRows(): number {
-    return this.terminal === null ? 0 : calculateContentRows(this.terminal.rows);
+    return this.outerHeight === null ? 0 : calculateContentRows(this.outerHeight);
   }
 
   private wrappedLines(contentWidth: number): string[] {

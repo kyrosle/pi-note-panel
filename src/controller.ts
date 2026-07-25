@@ -9,8 +9,8 @@ import { NoteStore } from "./note-store.ts";
 import { rawNoteMetrics, sanitizeNoteMarkdown } from "./sanitize.ts";
 import { updateSection, type SectionUpdate } from "./sections.ts";
 import { NoteSidebar } from "./sidebar.ts";
-import { installSplitLayout, type SplitLayoutHandle } from "./split-layout.ts";
-import type { PanelMetrics, PanelPreferences } from "./types.ts";
+import { installOverlayLayout, type OverlayLayoutHandle } from "./overlay-layout.ts";
+import { DEFAULT_PANEL_HEIGHT, DEFAULT_PANEL_WIDTH, type PanelMetrics, type PanelPreferences } from "./types.ts";
 
 const BOOTSTRAP_WIDGET_KEY = "pi-note-panel-bootstrap";
 const WATCH_DEBOUNCE_MS = 75;
@@ -19,6 +19,15 @@ export interface NotePanelControllerOptions {
   readNote?: () => Promise<string>;
   readSignature?: () => Promise<string | null>;
   watchPath?: typeof watch;
+}
+
+export interface NotePanelStatus {
+  enabled: boolean;
+  configuredWidth: number;
+  configuredHeight: number;
+  renderedWidth: number | null;
+  renderedHeight: number | null;
+  hiddenReason: PanelMetrics["hiddenReason"];
 }
 
 export class NotePanelController {
@@ -30,7 +39,7 @@ export class NotePanelController {
   private note = "";
   private noteSignature: string | null = null;
   private sidebar: NoteSidebar | undefined;
-  private layout: SplitLayoutHandle | undefined;
+  private layout: OverlayLayoutHandle | undefined;
   private projectWatcher: FSWatcher | undefined;
   private piWatcher: FSWatcher | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -48,7 +57,7 @@ export class NotePanelController {
     this.readNote = options.readNote ?? (() => this.store.read());
     this.readSignature = options.readSignature ?? (() => this.readNoteSignature());
     this.watchPath = options.watchPath ?? watch;
-    this.preferences = { enabled: true, width: 36 };
+    this.preferences = { enabled: false, width: DEFAULT_PANEL_WIDTH, height: DEFAULT_PANEL_HEIGHT };
   }
 
   static async create(ctx: ExtensionContext, options: NotePanelControllerOptions = {}): Promise<NotePanelController> {
@@ -69,15 +78,16 @@ export class NotePanelController {
     if (this.closing || this.disposed || ctx.mode !== "tui" || this.widgetContext !== undefined) {
       return;
     }
+    this.widgetContext = ctx;
     try {
       ctx.ui.setWidget(BOOTSTRAP_WIDGET_KEY, (tui, theme) => this.createBootstrap(tui, theme));
-      this.widgetContext = ctx;
     } catch (error) {
       try {
         ctx.ui.setWidget(BOOTSTRAP_WIDGET_KEY, undefined);
       } catch {
         // The original context may already have rejected the partial widget.
       }
+      this.widgetContext = undefined;
       throw error;
     }
   }
@@ -89,6 +99,18 @@ export class NotePanelController {
 
   async info(): Promise<PanelMetrics> {
     return this.metrics();
+  }
+
+  async status(): Promise<NotePanelStatus> {
+    const metrics = this.metrics();
+    return {
+      enabled: this.preferences.enabled,
+      configuredWidth: this.preferences.width,
+      configuredHeight: this.preferences.height,
+      renderedWidth: metrics.panel.outerWidth,
+      renderedHeight: metrics.panel.outerHeight,
+      hiddenReason: metrics.hiddenReason,
+    };
   }
 
   async replace(content: string): Promise<PanelMetrics> {
@@ -124,7 +146,6 @@ export class NotePanelController {
       await this.store.writePreferences(preferences);
       this.preferences = preferences;
       this.layout?.setEnabled(enabled);
-      this.sidebar?.invalidate();
       await this.refreshInternal();
       this.ensureWatcher();
     });
@@ -135,8 +156,29 @@ export class NotePanelController {
       const preferences = { ...await this.store.readPreferences(), width };
       await this.store.writePreferences(preferences);
       this.preferences = preferences;
-      this.layout?.setPanelWidth(width);
-      this.sidebar?.invalidate();
+      this.layout?.setPanelSize(width, preferences.height);
+      await this.refreshInternal();
+      this.ensureWatcher();
+    });
+  }
+
+  async setHeight(height: number): Promise<void> {
+    await this.enqueue(async () => {
+      const preferences = { ...await this.store.readPreferences(), height };
+      await this.store.writePreferences(preferences);
+      this.preferences = preferences;
+      this.layout?.setPanelSize(preferences.width, height);
+      await this.refreshInternal();
+      this.ensureWatcher();
+    });
+  }
+
+  async setSize(width: number, height: number): Promise<void> {
+    await this.enqueue(async () => {
+      const preferences = { ...await this.store.readPreferences(), width, height };
+      await this.store.writePreferences(preferences);
+      this.preferences = preferences;
+      this.layout?.setPanelSize(width, height);
       await this.refreshInternal();
       this.ensureWatcher();
     });
@@ -167,9 +209,8 @@ export class NotePanelController {
     }
     const message = {
       disabled: "Note panel is disabled.",
-      "narrow-terminal": "Note panel is hidden because the terminal is too narrow.",
+      "narrow-terminal": "Note panel is hidden because the terminal is too small.",
       "ui-unavailable": "Note panel is unavailable outside TUI mode.",
-      "layout-conflict": "Note panel is unavailable because another extension owns the layout.",
       "unsupported-tui": "Note panel is unavailable in this TUI.",
     }[reason];
     ctx.ui.notify(message, "warning");
@@ -204,7 +245,7 @@ export class NotePanelController {
       try {
         this.layout?.dispose();
       } catch {
-        // Split-layout disposal is also best-effort.
+        // Overlay disposal is best-effort.
       } finally {
         this.layout = undefined;
         this.sidebar = undefined;
@@ -224,14 +265,14 @@ export class NotePanelController {
     this.layout?.dispose();
     const sidebar = new NoteSidebar(tui, theme, () => {});
     sidebar.setNote(this.note);
-    const layout = installSplitLayout(tui, sidebar, {
+    const layout = installOverlayLayout(tui, sidebar, {
       enabled: this.preferences.enabled,
       panelWidth: this.preferences.width,
+      panelHeight: this.preferences.height,
+      onUnavailable: () => this.warnUnavailableVisualLayout(),
     });
     this.sidebar = sidebar;
     this.layout = layout;
-    this.warnUnavailableVisualLayout(layout.getHiddenReason());
-
     return {
       render: () => [],
       invalidate: () => {},
@@ -245,14 +286,12 @@ export class NotePanelController {
     };
   }
 
-  private warnUnavailableVisualLayout(reason: ReturnType<SplitLayoutHandle["getHiddenReason"]>): void {
-    if (this.warnedAboutVisualLayout || (reason !== "layout-conflict" && reason !== "unsupported-tui")) {
+  private warnUnavailableVisualLayout(): void {
+    if (this.warnedAboutVisualLayout) {
       return;
     }
     this.warnedAboutVisualLayout = true;
-    const message = reason === "layout-conflict"
-      ? "Note panel sidebar is unavailable because another extension owns the layout; commands and tools still work."
-      : "Note panel sidebar is unavailable in this TUI; commands and tools still work.";
+    const message = "Note panel overlay is unavailable in this TUI; commands and tools still work.";
     this.widgetContext?.ui.notify(message, "warning");
   }
 
@@ -364,7 +403,15 @@ export class NotePanelController {
       visible: false,
       hiddenReason: "ui-unavailable",
       terminal: null,
-      panel: { outerWidth: null, contentWidth: null, contentRows: null, scrollOffset: 0 },
+      panel: {
+        configuredWidth: this.preferences.width,
+        configuredHeight: this.preferences.height,
+        outerWidth: null,
+        outerHeight: null,
+        contentWidth: null,
+        contentRows: null,
+        scrollOffset: 0,
+      },
       note: {
         bytes: rawMetrics.bytes,
         sourceLines: rawMetrics.sourceLines,

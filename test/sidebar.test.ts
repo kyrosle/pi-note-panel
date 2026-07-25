@@ -71,7 +71,7 @@ test("reports UTF-8 source, wrapped, visible, and hidden note metrics", () => {
     visible: true,
     hiddenReason: null,
     terminal: { columns: 40, rows: 8 },
-    panel: { outerWidth: 10, contentWidth: 6, contentRows: 2, scrollOffset: 0 },
+    panel: { configuredWidth: 36, configuredHeight: 20, outerWidth: 10, outerHeight: 8, contentWidth: 6, contentRows: 2, scrollOffset: 0 },
     note: {
       bytes: Buffer.byteLength("中文测试\nabcdef", "utf8"),
       sourceLines: 2,

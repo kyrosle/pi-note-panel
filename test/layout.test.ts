@@ -5,7 +5,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import {
   calculateContentRows,
-  shouldShowPanel,
   sliceViewport,
   wrapMarkdownLines,
 } from "../src/layout.ts";
@@ -128,11 +127,6 @@ test("fails closed for non-finite viewport rows", () => {
       hidden: 2,
     });
   }
-});
-
-test("shows the panel only at the main-width threshold", () => {
-  assert.equal(shouldShowPanel(96, 36), false);
-  assert.equal(shouldShowPanel(97, 36), true);
 });
 
 test("calculates useful rows after the fixed panel chrome", () => {

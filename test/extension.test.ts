@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -26,7 +26,7 @@ interface RegisteredTool {
 function metrics(): PanelMetrics {
   return {
     uiAvailable: false, visible: false, hiddenReason: "ui-unavailable", terminal: null,
-    panel: { outerWidth: null, contentWidth: null, contentRows: null, scrollOffset: 0 },
+    panel: { configuredWidth: 36, configuredHeight: 20, outerWidth: null, outerHeight: null, contentWidth: null, contentRows: null, scrollOffset: 0 },
     note: { bytes: 0, sourceLines: 0, wrappedLines: null, visibleWrappedLines: null, hiddenWrappedLines: null },
     format: { markdown: "plain", supportsHeadings: true, supportsLists: true, supportsCheckboxes: true, supportsTables: false },
   };
@@ -65,12 +65,13 @@ function fakeController(content = "") {
   return {
     attach() {}, dispose() { disposed += 1; }, disposed: () => disposed,
     async info() { return metrics(); },
+    async status() { return { enabled: false, configuredWidth: 36, configuredHeight: 20, renderedWidth: null as number | null, renderedHeight: null as number | null, hiddenReason: "ui-unavailable" as "ui-unavailable" | null }; },
     async refresh() {},
     async read() { return { content: note, metrics: metrics() }; },
     async append(value: string) { note += value; return metrics(); },
     async replace(value: string) { note = value; return metrics(); },
     async updateSection() { return metrics(); },
-    async setEnabled(_value: boolean) {}, async setWidth(_value: number) {}, async edit() {}, focus() {},
+    async setEnabled(_value: boolean) {}, async setWidth(_value: number) {}, async setHeight(_value: number) {}, async setSize(_width: number, _height: number) {}, async edit() {}, focus() {},
   };
 }
 
@@ -321,21 +322,68 @@ test("commands support every branch, RPC edit, and strict invalid arguments", as
     const calls: string[] = [];
     controller.setEnabled = async (value: boolean) => { calls.push(`enabled:${value}`); };
     controller.setWidth = async (value: number) => { calls.push(`width:${value}`); };
+    controller.setHeight = async (value: number) => { calls.push(`height:${value}`); };
+    controller.setSize = async (width: number, height: number) => { calls.push(`size:${width}x${height}`); };
     controller.refresh = async () => { calls.push("refresh"); };
     controller.focus = () => { calls.push("focus"); };
     controller.edit = async () => { editCalls += 1; };
     registerNotePanelExtension(api as never, async () => controller as never);
     const command = api.commands.get("note-panel");
     const rpc = fakeContext(cwd, "rpc", "edited");
-    for (const args of ["", "on", "off", "width 24", "refresh", "focus"]) {
+    for (const args of ["on", "off", "width 24", "height 12", "size 48 28", "refresh", "focus"]) {
       await command?.handler(args, rpc);
     }
     await command?.handler("edit", rpc);
-    await command?.handler("width 23", rpc);
+    await command?.handler("width 19", rpc);
     await command?.handler("width 24 extra", rpc);
-    assert.deepEqual(calls, ["enabled:true", "enabled:false", "width:24", "refresh", "focus"]);
+    await command?.handler("height 7", rpc);
+    await command?.handler("size 19 20", rpc);
+    await command?.handler("size 161 20", rpc);
+    await command?.handler("size 20 7", rpc);
+    await command?.handler("size 20 121", rpc);
+    await command?.handler("size 20.5 20", rpc);
+    await command?.handler("size 20 8.5", rpc);
+    await command?.handler("size 48 28 extra", rpc);
+    assert.deepEqual(calls, ["enabled:true", "enabled:false", "width:24", "height:12", "size:48x28", "refresh", "focus"]);
     assert.equal(editCalls, 1);
     assert.ok(rpc.notices.some((notice) => notice.message.startsWith("Usage:")));
+  });
+});
+
+test("status reports enabled state plus configured, rendered, and hidden values in every mode", async () => {
+  await withProject(async (cwd) => {
+    for (const [mode, enabled] of [["print", false], ["rpc", true], ["tui", true]] as const) {
+      const api = fakeApi();
+      const controller = fakeController();
+      controller.status = async () => ({
+        enabled, configuredWidth: 48, configuredHeight: 28,
+        renderedWidth: mode === "tui" ? 40 : null,
+        renderedHeight: mode === "tui" ? 24 : null,
+        hiddenReason: mode === "tui" ? null : "ui-unavailable" as const,
+      });
+      registerNotePanelExtension(api as never, async () => controller as never);
+      const ctx = fakeContext(cwd, mode);
+      await api.commands.get("note-panel")?.handler("", ctx);
+      assert.equal(
+        ctx.notices.at(-1)?.message,
+        `Usage: /note-panel [on|off|width <20-160>|height <8-120>|size <20-160> <8-120>|refresh|edit|focus]\nNote panel status: enabled=${enabled}; configured=48x28; rendered=${mode === "tui" ? "40x24" : "unavailable"}; hiddenReason=${mode === "tui" ? "none" : "ui-unavailable"}.`,
+      );
+    }
+  });
+});
+
+test("invalid size commands do not create or partially write preferences", async () => {
+  await withProject(async (cwd) => {
+    const api = fakeApi();
+    registerNotePanelExtension(api as never);
+    const command = api.commands.get("note-panel");
+    const ctx = fakeContext(cwd);
+    for (const args of ["size 19 20", "size 161 20", "size 20 7", "size 20 121", "size 20.5 20", "size 20 8.5", "size 20 8 extra"]) {
+      await command?.handler(args, ctx);
+    }
+    await assert.rejects(() => readFile(join(cwd, ".pi", "note-panel.json"), "utf8"), { code: "ENOENT" });
+    assert.equal(ctx.notices.length, 7);
+    assert.ok(ctx.notices.every((notice) => notice.message.startsWith("Usage:")));
   });
 });
 

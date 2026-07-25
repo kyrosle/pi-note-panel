@@ -6,16 +6,20 @@ import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
+  DEFAULT_PANEL_HEIGHT,
   DEFAULT_PANEL_WIDTH,
+  MAX_PANEL_HEIGHT,
   MAX_PANEL_WIDTH,
+  MIN_PANEL_HEIGHT,
   MIN_PANEL_WIDTH,
   NOTE_LIMIT_BYTES,
   type PanelPreferences,
 } from "./types.ts";
 
 const DEFAULT_PREFERENCES: PanelPreferences = {
-  enabled: true,
+  enabled: false,
   width: DEFAULT_PANEL_WIDTH,
+  height: DEFAULT_PANEL_HEIGHT,
 };
 
 const NOTE_PROJECT_PATH = ".pi/NOTE.md";
@@ -377,7 +381,11 @@ export class NoteStore {
   }
 
   private parsePreferences(content: string): PanelPreferences {
-    return this.validatePreferences(JSON.parse(content));
+    const value = JSON.parse(content);
+    if (isLegacyPreferences(value)) {
+      return { ...value, height: DEFAULT_PANEL_HEIGHT };
+    }
+    return this.validatePreferences(value);
   }
 
   private validatePreferences(value: unknown): PanelPreferences {
@@ -385,7 +393,8 @@ export class NoteStore {
       typeof value !== "object" ||
       value === null ||
       typeof (value as { enabled?: unknown }).enabled !== "boolean" ||
-      !isValidWidth((value as { width?: unknown }).width)
+      !isValidWidth((value as { width?: unknown }).width) ||
+      !isValidHeight((value as { height?: unknown }).height)
     ) {
       throw new PreferencesValidationError();
     }
@@ -393,6 +402,7 @@ export class NoteStore {
     return {
       enabled: (value as { enabled: boolean }).enabled,
       width: (value as { width: number }).width,
+      height: (value as { height: number }).height,
     };
   }
 
@@ -419,7 +429,7 @@ export class NoteLimitError extends RangeError {
 
 export class PreferencesValidationError extends TypeError {
   constructor() {
-    super(`Preferences width must be an integer from ${MIN_PANEL_WIDTH} to ${MAX_PANEL_WIDTH}`);
+    super(`Preferences width must be an integer from ${MIN_PANEL_WIDTH} to ${MAX_PANEL_WIDTH} and height from ${MIN_PANEL_HEIGHT} to ${MAX_PANEL_HEIGHT}`);
   }
 }
 
@@ -448,6 +458,18 @@ function trimTrailingNewlines(content: string): string {
 
 function isValidWidth(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= MIN_PANEL_WIDTH && value <= MAX_PANEL_WIDTH;
+}
+
+function isValidHeight(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= MIN_PANEL_HEIGHT && value <= MAX_PANEL_HEIGHT;
+}
+
+function isLegacyPreferences(value: unknown): value is { enabled: boolean; width: number } {
+  return typeof value === "object"
+    && value !== null
+    && typeof (value as { enabled?: unknown }).enabled === "boolean"
+    && isValidWidth((value as { width?: unknown }).width)
+    && !Object.hasOwn(value, "height");
 }
 
 function isValidUnicodeString(value: string): boolean {

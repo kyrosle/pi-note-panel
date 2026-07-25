@@ -1,7 +1,7 @@
 {
   "name": "pi-note-panel",
-  "version": "0.1.0",
-  "description": "Project-scoped Markdown note sidebar for the Pi coding agent",
+  "version": "0.2.0",
+  "description": "Project-scoped Markdown note overlay for the Pi coding agent",
   "type": "module",
   "license": "MIT",
   "author": "kyrosle",
@@ -13,7 +13,7 @@
   "bugs": {
     "url": "https://github.com/kyrosle/pi-note-panel/issues"
   },
-  "keywords": ["pi-package", "pi", "pi-coding-agent", "notes", "sidebar", "markdown"],
+  "keywords": ["pi-package", "pi", "pi-coding-agent", "notes", "overlay", "markdown"],
   "exports": {
     ".": "./index.ts"
   },
@@ -27,9 +27,9 @@
     "extensions": ["./index.ts"]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-coding-agent": ">=0.82.0 <1",
+    "@earendil-works/pi-tui": ">=0.82.0 <1",
+    "typebox": ">=1.1.38 <2"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": { "optional": true },

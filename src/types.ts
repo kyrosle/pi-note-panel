@@ -1,12 +1,15 @@
 export const DEFAULT_PANEL_WIDTH = 36;
-export const MIN_PANEL_WIDTH = 24;
-export const MAX_PANEL_WIDTH = 80;
-export const MIN_MAIN_WIDTH = 60;
+export const DEFAULT_PANEL_HEIGHT = 20;
+export const MIN_PANEL_WIDTH = 20;
+export const MAX_PANEL_WIDTH = 160;
+export const MIN_PANEL_HEIGHT = 8;
+export const MAX_PANEL_HEIGHT = 120;
 export const NOTE_LIMIT_BYTES = 256 * 1024;
 
 export interface PanelPreferences {
   enabled: boolean;
   width: number;
+  height: number;
 }
 
 export interface TerminalDimensions {
@@ -18,7 +21,6 @@ export type NonNullHiddenReason =
   | "disabled"
   | "narrow-terminal"
   | "ui-unavailable"
-  | "layout-conflict"
   | "unsupported-tui";
 
 export type HiddenReason = NonNullHiddenReason | null;
@@ -37,7 +39,10 @@ interface PanelMetricsBase {
   uiAvailable: boolean;
   terminal: TerminalDimensions | null;
   panel: {
+    configuredWidth: number;
+    configuredHeight: number;
     outerWidth: number | null;
+    outerHeight: number | null;
     contentWidth: number | null;
     contentRows: number | null;
     scrollOffset: number;
