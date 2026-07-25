@@ -1,5 +1,10 @@
 # Pi Note Panel Design
 
+> Historical specification: the split-layout UI in this document is superseded
+> by `docs/superpowers/specs/2026-07-25-overlay-panel-design.md`. Storage,
+> safety, sanitizer, Markdown, tool, and refresh requirements remain historical
+> context where the newer specification does not replace them.
+
 ## Summary
 
 Pi Note Panel is a project-scoped Markdown note sidebar for the Pi coding agent.
